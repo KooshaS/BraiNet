@@ -1,0 +1,87 @@
+package com.example.b2breceiver;
+
+import android.media.AudioTrack;
+import android.media.AudioManager;
+import android.media.AudioFormat;
+
+class SoundGen extends Thread {
+    private static final int SAMPLES = 32 * 1024;
+
+    volatile boolean shouldStop;
+    private boolean doReset;
+
+    short[] left, right;
+    int leftSize, rightSize;
+    
+    private short[] buffer = new short[SAMPLES << 1];
+    private int leftPos = 0, rightPos = 0;
+    private AudioTrack audio;
+    boolean isMono, isSwap = false;
+
+    synchronized void update(short[] left, short[] right, int leftSize, int rightSize, boolean isMono) {
+        this.left = left;
+        this.right = right;
+        this.leftSize = leftSize;
+        this.rightSize = rightSize;
+        leftPos = rightPos = 0;
+        this.isMono = isMono;
+        
+        if (audio != null) {
+            audio.stop();
+            doReset = true;
+        }
+    }
+
+    void requestStop() {
+        shouldStop = true;
+    }
+    
+    public void run() {
+        final int size = SAMPLES << 1;
+
+        audio = new AudioTrack(AudioManager.STREAM_MUSIC, Server.RATE, 
+                               AudioFormat.CHANNEL_OUT_STEREO, 
+                               AudioFormat.ENCODING_PCM_16BIT, 
+                               SAMPLES * 4, AudioTrack.MODE_STREAM);
+        audio.setStereoVolume(1, 1);
+        audio.play();
+
+        while (!shouldStop) {
+            synchronized (this) {
+                short leftVal, rightVal;
+                for (int i = 0; i < size; i += 2) {
+                    leftVal  = left[leftPos];
+                    rightVal = right[rightPos];
+                    if (!isMono && !isSwap) {
+                        buffer[i]     = leftVal;
+                        buffer[i + 1] = rightVal;
+                    } else if (isMono) {
+                        buffer[i] = buffer[i+1] = (short) ((leftVal + rightVal) >> 1);
+                    } else {
+                        buffer[i]     = rightVal;
+                        buffer[i + 1] = leftVal;
+                    }
+                    if (++leftPos == leftSize) {
+                        leftPos = 0;
+                    }
+                    if (++rightPos == rightSize) {
+                        rightPos = 0;
+                    }
+                }
+            }
+            int wrote = audio.write(buffer, 0, size);
+            if (wrote != size) {
+                Server.log("wrote " + wrote + " of " + buffer.length);
+            }
+            if (doReset) {
+                // audio.flush();
+                audio.play();
+                doReset = false;
+            }
+        }
+        if (audio != null) {
+            audio.release();
+            audio = null;
+        }
+    }
+}
